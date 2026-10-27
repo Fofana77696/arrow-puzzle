@@ -1,0 +1,229 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Arrow Puzzle</title>
+<style>
+:root{--bg:#ffffff;--fg:#0b1544;--acc:#1e6fe8;--mut:#6b7280;--card:#f1f4fb;--bad:#e5484d;color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#0e1220;--fg:#e8ecff;--acc:#5b9bff;--mut:#9aa3b8;--card:#1a2036;--bad:#ff6b70;color-scheme:dark}}
+:root[data-theme="dark"]{--bg:#0e1220;--fg:#e8ecff;--acc:#5b9bff;--mut:#9aa3b8;--card:#1a2036;--bad:#ff6b70;color-scheme:dark}
+html,body{height:100%;margin:0}
+body{background:var(--bg);color:var(--fg);font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;display:flex;flex-direction:column;overflow:hidden;-webkit-user-select:none;user-select:none;touch-action:manipulation}
+header{display:flex;align-items:center;justify-content:space-between;padding:12px 16px;font-weight:600}
+#hearts{font-size:20px;letter-spacing:2px}
+button{font:inherit;border:0;border-radius:999px;background:var(--acc);color:#fff;padding:10px 20px;font-weight:600;cursor:pointer}
+button.ghost{background:var(--card);color:var(--fg);padding:8px 14px}
+#stage{flex:1;min-height:0;position:relative}
+canvas{position:absolute;inset:0;width:100%;height:100%}
+.ad{margin:8px 12px;height:56px;border:1px dashed var(--mut);border-radius:10px;display:flex;align-items:center;justify-content:center;color:var(--mut);font-size:13px;background:var(--card)}
+#ov{position:absolute;inset:0;background:color-mix(in srgb,var(--bg) 88%,transparent);display:none;flex-direction:column;align-items:center;justify-content:center;gap:14px;text-align:center;padding:24px}
+#ov h2{margin:0;font-size:28px}
+#ov .ad{width:min(300px,80%);height:100px;margin:0}
+</style>
+</head>
+<body>
+<header>
+  <span id="lv">Niveau 1</span>
+  <span id="hearts"></span>
+  <button class="ghost" id="hint" aria-label="Indice">💡 Indice</button>
+</header>
+<div id="stage">
+  <canvas id="c"></canvas>
+  <div id="ov">
+    <h2 id="ovt"></h2>
+    <div id="ovs" style="color:var(--mut)"></div>
+    <!-- Emplacement publicitaire (interstitiel / bannière) -->
+    
+    <button id="ovb">Continuer</button>
+  </div>
+</div>
+<!-- Emplacement bannière : à remplacer par votre bloc AdSense une fois la page hébergée sur votre domaine -->
+<div id="bannerSpace" style="height:calc(60px + env(safe-area-inset-bottom,0px))"></div>
+
+<script>
+const cv=document.getElementById("c"),ctx=cv.getContext("2d");
+const D=[[1,0],[-1,0],[0,1],[0,-1]];
+let level=1,hearts=3,arrows=[],GW=6,GH=8,cell=40,ox=0,oy=0,shake=0,flash=null,hintId=null,over=false,last=0;
+const rnd=n=>Math.floor(Math.random()*n);
+const key=(x,y)=>x+","+y;
+
+function gen(w,h,target){
+  let best=[];
+  for(let t=0;t<40;t++){
+    const occ=new Set(),forb=new Set(),res=[];
+    let fails=0;
+    while(fails<80){
+      const x0=rnd(w),y0=rnd(h);
+      if(occ.has(key(x0,y0))||forb.has(key(x0,y0))){fails++;continue}
+      const len=2+rnd(Math.min(2+Math.floor(level/2),6));
+      const path=[[x0,y0]],own=new Set([key(x0,y0)]);
+      while(path.length<len){
+        const [cx,cy]=path[path.length-1];
+        const o=D.map(d=>[cx+d[0],cy+d[1]]).filter(([x,y])=>x>=0&&y>=0&&x<w&&y<h&&!own.has(key(x,y))&&!occ.has(key(x,y))&&!forb.has(key(x,y)));
+        if(!o.length)break;
+        const n=o[rnd(o.length)];path.push(n);own.add(key(n[0],n[1]));
+      }
+      if(path.length<2){fails++;continue}
+      const [hx,hy]=path[path.length-1];
+      const dirs=D.filter(d=>{let x=hx+d[0],y=hy+d[1];while(x>=0&&y>=0&&x<w&&y<h){if(own.has(key(x,y)))return false;x+=d[0];y+=d[1]}return true});
+      if(!dirs.length){fails++;continue}
+      const d=dirs[rnd(dirs.length)];
+      path.forEach(p=>occ.add(key(p[0],p[1])));
+      let x=hx+d[0],y=hy+d[1];
+      while(x>=0&&y>=0&&x<w&&y<h){forb.add(key(x,y));x+=d[0];y+=d[1]}
+      res.push({path,d});fails=0;
+    }
+    if(res.length>best.length)best=res;
+    if(res.length>=target)break;
+  }
+  return best;
+}
+
+function build(a){
+  // chemin étendu : corps + rayon jusqu’au bord + sortie
+  const L=a.path.length-1;
+  const ext=a.path.map(p=>[p[0]+.5,p[1]+.5]);
+  const [hx,hy]=a.path[a.path.length-1];
+  let x=hx,y=hy;
+  const steps=Math.max(GW,GH)+L+3;
+  for(let i=0;i<steps;i++){x+=a.d[0];y+=a.d[1];ext.push([x+.5,y+.5])}
+  const cum=[0];
+  for(let i=1;i<ext.length;i++)cum.push(cum[i-1]+Math.abs(ext[i][0]-ext[i-1][0])+Math.abs(ext[i][1]-ext[i-1][1]));
+  return {...a,L,ext,cum,s:0,moving:false,done:false};
+}
+
+function pointAt(a,s){
+  s=Math.max(0,Math.min(s,a.cum[a.cum.length-1]));
+  let i=1;while(i<a.cum.length-1&&a.cum[i]<s)i++;
+  const t=(s-a.cum[i-1])/((a.cum[i]-a.cum[i-1])||1);
+  return [a.ext[i-1][0]+(a.ext[i][0]-a.ext[i-1][0])*t,a.ext[i-1][1]+(a.ext[i][1]-a.ext[i-1][1])*t];
+}
+
+function start(){
+  GW=Math.min(5+Math.floor((level-1)/2),9);
+  GH=Math.min(GW+3,13);
+  const target=Math.floor(GW*GH*.34);
+  arrows=gen(GW,GH,target).map(build);
+  hearts=3;hintId=null;flash=null;over=false;
+  document.getElementById("ov").style.display="none";
+  ui();resize();
+}
+function ui(){
+  document.getElementById("lv").textContent="Niveau "+level;
+  document.getElementById("hearts").textContent="❤️".repeat(hearts)+"🤍".repeat(3-hearts);
+}
+function resize(){
+  const r=cv.parentElement.getBoundingClientRect(),dpr=window.devicePixelRatio||1;
+  cv.width=r.width*dpr;cv.height=r.height*dpr;
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+  cell=Math.min((r.width-24)/GW,(r.height-16)/GH);
+  ox=(r.width-cell*GW)/2;oy=(r.height-cell*GH)/2;
+}
+addEventListener("resize",resize);
+
+function occupancy(skip){
+  const m=new Map();
+  arrows.forEach(a=>{if(a.done||a.moving||a===skip)return;a.path.forEach(p=>m.set(key(p[0],p[1]),a))});
+  return m;
+}
+function blocker(a){
+  const m=occupancy(a);
+  let [x,y]=a.path[a.path.length-1];
+  x+=a.d[0];y+=a.d[1];
+  while(x>=0&&y>=0&&x<GW&&y<GH){const b=m.get(key(x,y));if(b)return b;x+=a.d[0];y+=a.d[1]}
+  return null;
+}
+
+cv.addEventListener("pointerdown",e=>{
+  if(over)return;
+  const r=cv.getBoundingClientRect();
+  const cx=Math.floor((e.clientX-r.left-ox)/cell),cy=Math.floor((e.clientY-r.top-oy)/cell);
+  const a=occupancy().get(key(cx,cy));
+  if(!a)return;
+  hintId=null;
+  const b=blocker(a);
+  if(!b){a.moving=true;return}
+  flash={ids:[arrows.indexOf(a),arrows.indexOf(b)],t:.5};shake=.3;
+  hearts--;ui();
+  if(hearts<=0)end(false);
+});
+document.getElementById("hint").onclick=()=>{
+  if(over)return;
+  const free=arrows.filter(a=>!a.done&&!a.moving&&!blocker(a));
+  if(free.length)hintId=arrows.indexOf(free[rnd(free.length)]);
+};
+function end(win){
+  over=true;
+  const ov=document.getElementById("ov");
+  document.getElementById("ovt").textContent=win?"Bravo ! 🎉":"Perdu 💔";
+  document.getElementById("ovs").textContent=win?"Grille vidée, niveau "+level+" terminé.":"Plus de vies, réessayez ce niveau.";
+  document.getElementById("ovb").textContent=win?"Niveau suivant":"Rejouer";
+  document.getElementById("ovb").onclick=async()=>{if(win){level++;if(level%2===1)await showInterstitial()}start()};
+  setTimeout(()=>ov.style.display="flex",win?250:500);
+}
+
+function stroke(a,i,color){
+  const s0=a.s,s1=a.s+a.L;
+  const pts=[pointAt(a,s0)];
+  for(let k=0;k<a.cum.length;k++)if(a.cum[k]>s0+1e-6&&a.cum[k]<s1-1e-6)pts.push(a.ext[k]);
+  const h=pointAt(a,s1);pts.push(h);
+  const pr=pointAt(a,s1-.02);
+  const dx=h[0]-pr[0],dy=h[1]-pr[1],dl=Math.hypot(dx,dy)||1,ux=dx/dl,uy=dy/dl;
+  ctx.strokeStyle=color;ctx.fillStyle=color;ctx.lineWidth=cell*.15;ctx.lineCap="round";ctx.lineJoin="round";
+  ctx.beginPath();pts.forEach((p,j)=>{const X=ox+p[0]*cell,Y=oy+p[1]*cell;j?ctx.lineTo(X,Y):ctx.moveTo(X,Y)});ctx.stroke();
+  const hx=ox+h[0]*cell,hy=oy+h[1]*cell,sz=cell*.3;
+  ctx.beginPath();
+  ctx.moveTo(hx+ux*sz*1.1,hy+uy*sz*1.1);
+  ctx.lineTo(hx-uy*sz*.8,hy+ux*sz*.8);
+  ctx.lineTo(hx+uy*sz*.8,hy-ux*sz*.8);
+  ctx.closePath();ctx.fill();
+}
+
+function frame(t){
+  const dt=Math.min((t-last)/1000||0,.05);last=t;
+  const r=cv.parentElement.getBoundingClientRect();
+  ctx.clearRect(0,0,r.width,r.height);
+  ctx.save();
+  if(shake>0){shake-=dt;ctx.translate(Math.sin(t/20)*5,0)}
+  if(flash){flash.t-=dt;if(flash.t<=0)flash=null}
+  const css=getComputedStyle(document.documentElement);
+  const fg=css.getPropertyValue("--fg").trim()||"#0b1544",acc=css.getPropertyValue("--acc").trim()||"#1e6fe8",bad=css.getPropertyValue("--bad").trim()||"#e5484d",mut=css.getPropertyValue("--mut").trim()||"#999";
+  ctx.fillStyle=mut;ctx.globalAlpha=.25;
+  for(let x=0;x<GW;x++)for(let y=0;y<GH;y++){ctx.beginPath();ctx.arc(ox+(x+.5)*cell,oy+(y+.5)*cell,cell*.04,0,7);ctx.fill()}
+  ctx.globalAlpha=1;
+  arrows.forEach((a,i)=>{
+    if(a.done)return;
+    if(a.moving){a.s+=dt*16;if(a.s+a.L>=a.cum[a.cum.length-1]){a.done=true;return}}
+    let c=fg;
+    if(hintId===i)c=acc;
+    if(flash&&flash.ids.includes(i))c=bad;
+    stroke(a,i,c);
+  });
+  ctx.restore();
+  if(!over&&arrows.length&&arrows.every(a=>a.done))end(true);
+  requestAnimationFrame(frame);
+}
+
+/* ===== Publicités AdMob (IDs de TEST Google : à remplacer avant publication) ===== */
+const ADS={test:true,banner:"ca-app-pub-3940256099942544/6300978111",inter:"ca-app-pub-3940256099942544/1033173712"};
+const AM=(window.Capacitor&&Capacitor.isNativePlatform&&Capacitor.isNativePlatform())?Capacitor.registerPlugin("AdMob"):null;
+async function initAds(){
+  if(!AM)return;
+  try{
+    const c=await AM.requestConsentInfo();
+    if(c.isConsentFormAvailable&&c.status==="REQUIRED")await AM.showConsentForm();
+    await AM.initialize({initializeForTesting:ADS.test});
+    await AM.showBanner({adId:ADS.banner,adSize:"ADAPTIVE_BANNER",position:"BOTTOM_CENTER",margin:0,isTesting:ADS.test});
+    await AM.prepareInterstitial({adId:ADS.inter,isTesting:ADS.test});
+  }catch(e){console.warn("AdMob",e)}
+}
+async function showInterstitial(){
+  if(!AM)return;
+  try{await AM.showInterstitial();await AM.prepareInterstitial({adId:ADS.inter,isTesting:ADS.test})}catch(e){console.warn("AdMob",e)}
+}
+initAds();
+start();requestAnimationFrame(frame);
+</script>
+</body>
+</html>
