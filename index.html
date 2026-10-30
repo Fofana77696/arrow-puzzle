@@ -22,7 +22,7 @@ canvas{position:absolute;inset:0;width:100%;height:100%}
 #ov .ad{width:min(300px,80%);height:100px;margin:0}
 </style>
 <script>
-function showErr(m){var d=document.getElementById("err");if(!d){d=document.createElement("pre");d.id="err";d.style.cssText="position:fixed;left:8px;right:8px;top:70px;z-index:99;background:#fff3f3;color:#b00020;font-size:11px;padding:8px;white-space:pre-wrap;max-height:40%;overflow:auto";document.body.appendChild(d)}d.textContent+=m+"\n"}
+function showErr(m){var d=document.getElementById("err");if(!d){d=document.createElement("pre");d.id="err";d.style.cssText="position:fixed;left:8px;right:8px;top:70px;z-index:99;background:#fff3f3;color:#b00020;font-size:11px;padding:8px;white-space:pre-wrap;max-height:40%;overflow:auto";d.onclick=function(){d.remove()};document.body.appendChild(d)}d.textContent+=m+"\n"}
 window.onerror=function(m,s,l){showErr("Erreur: "+m+" (ligne "+l+")")};
 </script>
 </head>
@@ -43,6 +43,7 @@ window.onerror=function(m,s,l){showErr("Erreur: "+m+" (ligne "+l+")")};
   </div>
 </div>
 <!-- Emplacement bannière : à remplacer par votre bloc AdSense une fois la page hébergée sur votre domaine -->
+<div id="adlog" style="font-size:10px;color:var(--mut);padding:2px 12px;word-break:break-all"></div>
 <div id="bannerSpace" style="height:calc(60px + env(safe-area-inset-bottom,0px))"></div>
 
 <script>
@@ -164,7 +165,7 @@ function end(win){
   document.getElementById("ovt").textContent=win?"Bravo ! 🎉":"Perdu 💔";
   document.getElementById("ovs").textContent=win?"Grille vidée, niveau "+level+" terminé.":"Plus de vies, réessayez ce niveau.";
   document.getElementById("ovb").textContent=win?"Niveau suivant":"Rejouer";
-  document.getElementById("ovb").onclick=async()=>{if(win){level++;if(level%2===1)await showInterstitial()}start()};
+  document.getElementById("ovb").onclick=async()=>{if(win){level++;if(ADS.test||level%2===1)await showInterstitial()}start()};
   setTimeout(()=>ov.style.display="flex",win?250:500);
 }
 
@@ -219,19 +220,26 @@ try{
     AM=(C.Plugins&&C.Plugins.AdMob)||(typeof C.registerPlugin==="function"?C.registerPlugin("AdMob"):null);
   }
 }catch(e){console.warn("AdMob init",e)}
+function adLog(m){var d=document.getElementById("adlog");if(d)d.textContent+=m+" | "}
+function errTxt(e){try{return (e&&e.message)||JSON.stringify(e)}catch(x){return String(e)}}
 async function initAds(){
-  if(!AM)return;
+  const C=window.Capacitor;
+  if(!AM){
+    showErr("Pubs: module AdMob introuvable. Capacitor="+!!C+", natif="+!!(C&&C.isNativePlatform&&C.isNativePlatform())+", plugins="+Object.keys((C&&C.Plugins)||{}).join(","));
+    return;
+  }
   try{
     const c=await AM.requestConsentInfo();
     if(c.isConsentFormAvailable&&c.status==="REQUIRED")await AM.showConsentForm();
-    await AM.initialize({initializeForTesting:ADS.test});
-    await AM.showBanner({adId:ADS.banner,adSize:"ADAPTIVE_BANNER",position:"BOTTOM_CENTER",margin:0,isTesting:ADS.test});
-    await AM.prepareInterstitial({adId:ADS.inter,isTesting:ADS.test});
-  }catch(e){console.warn("AdMob",e)}
+  }catch(e){console.warn("consent",e)}
+  try{await AM.initialize({initializeForTesting:ADS.test})}catch(e){showErr("AdMob initialize: "+errTxt(e))}
+  try{AM.addListener("bannerAdFailedToLoad",function(e){showErr("Banniere refusee: "+errTxt(e))})}catch(e){}
+  try{await AM.showBanner({adId:ADS.banner,adSize:"ADAPTIVE_BANNER",position:"BOTTOM_CENTER",margin:0,isTesting:ADS.test})}catch(e){showErr("showBanner: "+errTxt(e))}
+  try{await AM.prepareInterstitial({adId:ADS.inter,isTesting:ADS.test})}catch(e){showErr("prepareInterstitial: "+errTxt(e))}
 }
 async function showInterstitial(){
   if(!AM)return;
-  try{await AM.showInterstitial();await AM.prepareInterstitial({adId:ADS.inter,isTesting:ADS.test})}catch(e){console.warn("AdMob",e)}
+  try{await AM.showInterstitial();await AM.prepareInterstitial({adId:ADS.inter,isTesting:ADS.test})}catch(e){showErr("Interstitiel: "+((e&&e.message)||JSON.stringify(e)))}
 }
 function boot(){try{start();requestAnimationFrame(frame)}catch(e){showErr("start: "+e.message)}setTimeout(initAds,800)}
 if(document.readyState==="complete")boot();else addEventListener("load",boot);
