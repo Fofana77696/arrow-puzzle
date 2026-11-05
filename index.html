@@ -22,7 +22,8 @@ canvas{position:absolute;inset:0;width:100%;height:100%}
 #ov .ad{width:min(300px,80%);height:100px;margin:0}
 </style>
 <script>
-function showErr(m){var d=document.getElementById("err");if(!d){d=document.createElement("pre");d.id="err";d.style.cssText="position:fixed;left:8px;right:8px;top:70px;z-index:99;background:#fff3f3;color:#b00020;font-size:11px;padding:8px;white-space:pre-wrap;max-height:40%;overflow:auto";d.onclick=function(){d.remove()};document.body.appendChild(d)}d.textContent+=m+"\n"}
+var DEBUG=false;try{DEBUG=localStorage.getItem("flechix_debug")==="1"}catch(e){}
+function showErr(m){try{console.warn(m)}catch(e){}if(!DEBUG)return;var d=document.getElementById("err");if(!d){d=document.createElement("pre");d.id="err";d.style.cssText="position:fixed;left:8px;right:8px;top:70px;z-index:99;background:#fff3f3;color:#b00020;font-size:11px;padding:8px;white-space:pre-wrap;max-height:40%;overflow:auto";d.onclick=function(){d.remove()};document.body.appendChild(d)}d.textContent+=m+"\n"}
 window.onerror=function(m,s,l){showErr("Erreur: "+m+" (ligne "+l+")")};
 </script>
 </head>
@@ -31,6 +32,7 @@ window.onerror=function(m,s,l){showErr("Erreur: "+m+" (ligne "+l+")")};
   <span id="lv">Niveau 1</span>
   <span id="hearts"></span>
   <button class="ghost" id="hint" aria-label="Indice">💡 Indice</button>
+  <button class="ghost" id="snd" aria-label="Son" style="padding:8px 12px">🔊</button>
 </header>
 <div id="stage">
   <canvas id="c"></canvas>
@@ -43,15 +45,42 @@ window.onerror=function(m,s,l){showErr("Erreur: "+m+" (ligne "+l+")")};
   </div>
 </div>
 <!-- Emplacement bannière : à remplacer par votre bloc AdSense une fois la page hébergée sur votre domaine -->
-<div id="adlog" style="font-size:10px;color:var(--mut);padding:2px 12px;word-break:break-all"></div>
 <div id="bannerSpace" style="height:calc(60px + env(safe-area-inset-bottom,0px))"></div>
 
 <script>
 const cv=document.getElementById("c"),ctx=cv.getContext("2d");
 const D=[[1,0],[-1,0],[0,1],[0,-1]];
-let level=1,hearts=3,arrows=[],GW=6,GH=8,cell=40,ox=0,oy=0,shake=0,flash=null,hintId=null,over=false,last=0;
+function loadLevel(){try{var v=parseInt(localStorage.getItem("flechix_level"),10);return v>=1?v:1}catch(e){return 1}}
+function saveLevel(){try{localStorage.setItem("flechix_level",String(level))}catch(e){}}
+let SOUND=true;try{SOUND=localStorage.getItem("flechix_sound")!=="0"}catch(e){}
+let hintFree=1,hintBusy=false;
+let level=loadLevel(),hearts=3,arrows=[],GW=6,GH=8,cell=40,ox=0,oy=0,shake=0,flash=null,hintId=null,over=false,last=0;
 const rnd=n=>Math.floor(Math.random()*n);
 const key=(x,y)=>x+","+y;
+
+/* ===== Sons et vibrations ===== */
+let AC=null;
+function beep(freq,dur,type,vol,delay){
+  if(!SOUND)return;
+  try{
+    AC=AC||new (window.AudioContext||window.webkitAudioContext)();
+    if(AC.state==="suspended")AC.resume();
+    const t=AC.currentTime+(delay||0),o=AC.createOscillator(),g=AC.createGain();
+    o.type=type||"sine";o.frequency.setValueAtTime(freq,t);
+    g.gain.setValueAtTime(vol||.12,t);g.gain.exponentialRampToValueAtTime(.001,t+dur);
+    o.connect(g);g.connect(AC.destination);o.start(t);o.stop(t+dur+.02);
+  }catch(e){}
+}
+function sfx(k){
+  if(k==="move"){beep(520,.09,"sine",.12);beep(780,.09,"sine",.1,.07)}
+  else if(k==="bad"){beep(160,.25,"sawtooth",.1)}
+  else if(k==="win"){[523,659,784,1047].forEach(function(f,i){beep(f,.2,"triangle",.14,i*.12)})}
+  else if(k==="lose"){beep(330,.2,"square",.07);beep(220,.35,"square",.07,.18)}
+}
+function buzz(ms){try{if(SOUND&&navigator.vibrate)navigator.vibrate(ms)}catch(e){}}
+function updSnd(){document.getElementById("snd").textContent=SOUND?"🔊":"🔇"}
+function updHint(){var b=document.getElementById("hint");b.textContent=hintBusy?"⏳ Indice":(hintFree>0?"💡 Indice":"🎬 Indice")}
+document.getElementById("snd").onclick=function(){SOUND=!SOUND;try{localStorage.setItem("flechix_sound",SOUND?"1":"0")}catch(e){}updSnd();if(SOUND)sfx("move")};
 
 function gen(w,h,target){
   let best=[];
@@ -110,9 +139,9 @@ function start(){
   GH=Math.min(GW+3,13);
   const target=Math.floor(GW*GH*.34);
   arrows=gen(GW,GH,target).map(build);
-  hearts=3;hintId=null;flash=null;over=false;
+  hearts=3;hintId=null;flash=null;over=false;hintFree=1;hintBusy=false;
   document.getElementById("ov").style.display="none";
-  ui();resize();
+  ui();updHint();updSnd();resize();
 }
 function ui(){
   document.getElementById("lv").textContent="Niveau "+level;
@@ -149,15 +178,24 @@ cv.addEventListener("pointerdown",e=>{
   if(!a)return;
   hintId=null;
   const b=blocker(a);
-  if(!b){a.moving=true;return}
+  if(!b){a.moving=true;sfx("move");buzz(12);return}
   flash={ids:[arrows.indexOf(a),arrows.indexOf(b)],t:.5};shake=.3;
-  hearts--;ui();
+  hearts--;ui();sfx("bad");buzz(90);
   if(hearts<=0)end(false);
 });
-document.getElementById("hint").onclick=()=>{
-  if(over)return;
+function giveHint(){
   const free=arrows.filter(a=>!a.done&&!a.moving&&!blocker(a));
   if(free.length)hintId=arrows.indexOf(free[rnd(free.length)]);
+}
+document.getElementById("hint").onclick=async()=>{
+  if(over||hintBusy)return;
+  if(hintFree>0){hintFree--;giveHint();updHint();return}
+  hintBusy=true;updHint();
+  let ok=false;
+  try{ok=await watchRewarded()}catch(e){ok=true}
+  hintBusy=false;
+  if(ok&&!over)giveHint();
+  updHint();
 };
 function end(win){
   over=true;
@@ -165,7 +203,8 @@ function end(win){
   document.getElementById("ovt").textContent=win?"Bravo ! 🎉":"Perdu 💔";
   document.getElementById("ovs").textContent=win?"Grille vidée, niveau "+level+" terminé.":"Plus de vies, réessayez ce niveau.";
   document.getElementById("ovb").textContent=win?"Niveau suivant":"Rejouer";
-  document.getElementById("ovb").onclick=async()=>{if(win){level++;if(ADS.test||level%2===1)await showInterstitial()}start()};
+  if(win){sfx("win");buzz(60)}else{sfx("lose");buzz(200)}
+  document.getElementById("ovb").onclick=async()=>{if(win){level++;saveLevel();if(ADS.test||(level-1)%3===0)await showInterstitial()}start()};
   setTimeout(()=>ov.style.display="flex",win?250:500);
 }
 
@@ -211,8 +250,12 @@ function frame(t){
   requestAnimationFrame(frame);
 }
 
-/* ===== Publicités AdMob (IDs de TEST Google : à remplacer avant publication) ===== */
-const ADS={test:true,banner:"ca-app-pub-3940256099942544/6300978111",inter:"ca-app-pub-3940256099942544/1033173712"};
+/* ===== Publicités AdMob =====
+   ADS.test=true : pubs de TEST Google (sans risque). Passer à false uniquement pour la version publiée. */
+const ADS={test:true,
+  testIds:{banner:"ca-app-pub-3940256099942544/6300978111",inter:"ca-app-pub-3940256099942544/1033173712",reward:"ca-app-pub-3940256099942544/5224354917"},
+  prodIds:{banner:"ca-app-pub-8913332477594973/8581702093",inter:"ca-app-pub-8913332477594973/6550435124",reward:"ca-app-pub-8913332477594973/4662638386"}};
+const ID=ADS.test?ADS.testIds:ADS.prodIds;
 let AM=null;
 try{
   const C=window.Capacitor;
@@ -220,7 +263,6 @@ try{
     AM=(C.Plugins&&C.Plugins.AdMob)||(typeof C.registerPlugin==="function"?C.registerPlugin("AdMob"):null);
   }
 }catch(e){console.warn("AdMob init",e)}
-function adLog(m){var d=document.getElementById("adlog");if(d)d.textContent+=m+" | "}
 function errTxt(e){try{return (e&&e.message)||JSON.stringify(e)}catch(x){return String(e)}}
 async function initAds(){
   const C=window.Capacitor;
@@ -234,12 +276,29 @@ async function initAds(){
   }catch(e){console.warn("consent",e)}
   try{await AM.initialize({initializeForTesting:ADS.test})}catch(e){showErr("AdMob initialize: "+errTxt(e))}
   try{AM.addListener("bannerAdFailedToLoad",function(e){showErr("Banniere refusee: "+errTxt(e))})}catch(e){}
-  try{await AM.showBanner({adId:ADS.banner,adSize:"ADAPTIVE_BANNER",position:"BOTTOM_CENTER",margin:0,isTesting:ADS.test})}catch(e){showErr("showBanner: "+errTxt(e))}
-  try{await AM.prepareInterstitial({adId:ADS.inter,isTesting:ADS.test})}catch(e){showErr("prepareInterstitial: "+errTxt(e))}
+  try{await AM.showBanner({adId:ID.banner,adSize:"ADAPTIVE_BANNER",position:"BOTTOM_CENTER",margin:0,isTesting:ADS.test})}catch(e){showErr("showBanner: "+errTxt(e))}
+  try{await AM.prepareInterstitial({adId:ID.inter,isTesting:ADS.test})}catch(e){showErr("prepareInterstitial: "+errTxt(e))}
 }
 async function showInterstitial(){
   if(!AM)return;
-  try{await AM.showInterstitial();await AM.prepareInterstitial({adId:ADS.inter,isTesting:ADS.test})}catch(e){showErr("Interstitiel: "+((e&&e.message)||JSON.stringify(e)))}
+  try{await AM.showInterstitial();await AM.prepareInterstitial({adId:ID.inter,isTesting:ADS.test})}catch(e){showErr("Interstitiel: "+((e&&e.message)||JSON.stringify(e)))}
+}
+
+function watchRewarded(){
+  return new Promise(async function(resolve){
+    if(!AM){resolve(true);return}
+    let rewarded=false,done=false;const hs=[];
+    const finish=function(v){if(done)return;done=true;hs.forEach(function(h){try{h&&h.remove&&h.remove()}catch(e){}});resolve(v)};
+    try{
+      hs.push(await AM.addListener("onRewardedVideoAdReward",function(){rewarded=true}));
+      hs.push(await AM.addListener("onRewardedVideoAdDismissed",function(){setTimeout(function(){finish(rewarded)},400)}));
+      hs.push(await AM.addListener("onRewardedVideoAdFailedToShow",function(){finish(true)}));
+      await AM.prepareRewardVideoAd({adId:ID.reward,isTesting:ADS.test});
+      const r=await AM.showRewardVideoAd();
+      if(r&&(r.amount||r.type)){rewarded=true;setTimeout(function(){finish(true)},1500)}
+    }catch(e){showErr("Recompense: "+errTxt(e));finish(true)}
+    setTimeout(function(){finish(rewarded)},120000);
+  });
 }
 function boot(){try{start();requestAnimationFrame(frame)}catch(e){showErr("start: "+e.message)}setTimeout(initAds,800)}
 if(document.readyState==="complete")boot();else addEventListener("load",boot);
